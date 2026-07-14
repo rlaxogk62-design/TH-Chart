@@ -6,3 +6,4 @@ xgboost
 scikit-learn
 joblib
 plotly
+ccxt
