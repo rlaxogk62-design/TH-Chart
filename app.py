@@ -1,78 +1,70 @@
 import streamlit as st
-import yfinance as yf
+import ccxt
 import pandas as pd
 import numpy as np
 import joblib
 import plotly.graph_objects as go
-import time
 import os
 import warnings
+import datetime
+from streamlit_autorefresh import st_autorefresh
+
 warnings.filterwarnings('ignore')
 
 # 웹페이지 기본 설정
-st.set_page_config(page_title="TH Chart | AI Dashboard", page_icon="👑", layout="wide")
+st.set_page_config(page_title="TH Chart | Pro Dashboard", page_icon="⚡", layout="wide")
 
-# 커스텀 CSS 적용
+# 전문 Auto-Refresh 엔진: 1분(60000ms)마다 브라우저 자동 새로고침
+st_autorefresh(interval=60000, limit=None, key="auto_refresh_timer")
+
+# 커스텀 CSS 적용 (프리미엄 테마)
 st.markdown("""
     <style>
-    [data-testid="stAppViewContainer"] { background-color: #0b0e11; color: #EAECEF; }
-    [data-testid="stSidebar"] { background-color: #181a20; }
+    [data-testid="stAppViewContainer"] { background-color: #0E1117; color: #EAECEF; }
+    [data-testid="stSidebar"] { background-color: #161A25; }
     [data-testid="stHeader"] { background-color: transparent; }
-    .main-title { font-size: 50px; font-weight: 900; color: #F3BA2F; text-align: center; margin-bottom: 0px; text-shadow: 2px 2px 4px #000000; }
-    .sub-title { font-size: 20px; color: #848E9C; text-align: center; margin-top: -10px; margin-bottom: 30px; }
-    div[data-testid="metric-container"] { background-color: #181a20; border-radius: 8px; padding: 15px; border: 1px solid #2B3139; }
-    .stAlert { background-color: #181a20 !important; border: 1px solid #2B3139 !important; }
+    .main-title { font-size: 55px; font-weight: 900; color: #00E676; text-align: center; margin-bottom: 0px; text-shadow: 0px 0px 10px rgba(0,230,118,0.5); }
+    .sub-title { font-size: 22px; color: #A0AEC0; text-align: center; margin-top: -10px; margin-bottom: 30px; }
+    div[data-testid="metric-container"] { background-color: #1A202C; border-radius: 10px; padding: 20px; border: 1px solid #2D3748; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
     </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<p class="main-title">👑 TH Chart</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-title">Taeha\'s AI-Powered BTC 15m Prediction Dashboard</p>', unsafe_allow_html=True)
+st.markdown('<p class="main-title">⚡ TH Chart Pro</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-title">Live Kraken Engine (Real-Time Anti-Freeze)</p>', unsafe_allow_html=True)
 
-st.sidebar.title("✨ TH Chart Info")
+# 서버 시간 계산
+now_utc = datetime.datetime.utcnow()
+now_kst = now_utc + datetime.timedelta(hours=9)
+
+st.sidebar.title("⚙️ System Status")
 st.sidebar.markdown("---")
-st.sidebar.info("👨‍💻 **CEO / Developer:** 태하 (Taeha)")
-st.sidebar.success("🤖 **Core Engine:** XGBoost MTF")
+st.sidebar.success("🟢 **Live Engine:** Active (Kraken)")
+st.sidebar.info("🔄 **Auto Refresh:** 60s")
+st.sidebar.markdown("**App Version:** `V6_KRAKEN_ENGINE`")
+st.sidebar.markdown(f"**서버 시간 (UTC):** `{now_utc.strftime('%H:%M:%S')}`")
+st.sidebar.markdown(f"**서버 시간 (KST):** `{now_kst.strftime('%H:%M:%S')}`")
 
-chart_days = st.sidebar.slider("📊 차트 표시 기간 (일)", min_value=1, max_value=58, value=1)
+chart_days = st.sidebar.slider("📊 차트 표시 기간 (일)", min_value=1, max_value=30, value=1)
 
-# 새로고침 버튼 (yfinance 차단 방지용 수동/간헐적 새로고침)
-if st.sidebar.button("🔄 최신 데이터 불러오기"): 
-    st.cache_data.clear()
-    st.rerun()
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 💡 Signal Guide")
-st.sidebar.write("- <span style='color:#0ECB81'>▲</span> **Pred Up:** 상승 돌파 예상 (Long)", unsafe_allow_html=True)
-st.sidebar.write("- <span style='color:#F6465D'>▼</span> **Pred Down:** 하락 이탈 예상 (Short)", unsafe_allow_html=True)
-
-LOG_FILE = "prediction_history.csv"
-
-def update_prediction_log(latest_time, latest_close, latest_pred):
-    if not os.path.exists(LOG_FILE):
-        df_log = pd.DataFrame(columns=["Time", "Close Price", "Prediction"])
-        df_log.to_csv(LOG_FILE, index=False)
-
-    df_log = pd.read_csv(LOG_FILE)
-    latest_time_str = str(latest_time)
-
-    if len(df_log) == 0 or df_log.iloc[-1]["Time"] != latest_time_str:
-        pred_text = "상승 돌파 📈" if latest_pred == 2 else ("하락 이탈 📉" if latest_pred == 0 else "횡보 관망 ⏳")
-        new_row = pd.DataFrame([{"Time": latest_time_str, "Close Price": f"${latest_close:,.2f}", "Prediction": pred_text}])
-        df_log = pd.concat([df_log, new_row], ignore_index=True)
-        df_log.to_csv(LOG_FILE, index=False)
-
-    return df_log.tail(15)
-
-# yfinance 차단 방지를 위해 2분(120초) 캐싱 적용
-@st.cache_data(ttl=120, show_spinner="데이터를 가져오는 중...")
+# 바이낸스 차단 우회, yfinance 지연 해결을 위한 크라켄(Kraken) 거래소 사용
 def fetch_and_process_data(days_to_show):
     fetch_days = min(days_to_show + 2, 60)
-    btc_df = yf.Ticker('BTC-USD').history(interval='15m', period=f'{fetch_days}d')
-    if btc_df.empty:
-        raise ValueError("yfinance에서 데이터를 가져오지 못했습니다. 잠시 후 다시 시도해주세요.")
-        
-    btc_df = btc_df[['Open', 'High', 'Low', 'Close', 'Volume']]
-    btc_df.index = btc_df.index.tz_convert('Asia/Seoul').tz_localize(None)
+    limit = fetch_days * 96
+
+    # 미국 IP 차단이 없는 Kraken 거래소 실시간 데이터 호출
+    exchange = ccxt.kraken()
+    ohlcv = exchange.fetch_ohlcv('BTC/USDT', timeframe='15m', limit=limit)
+
+    if not ohlcv:
+        raise ValueError("크라켄 거래소에서 데이터를 가져오지 못했습니다.")
+
+    df = pd.DataFrame(ohlcv, columns=['Datetime', 'Open', 'High', 'Low', 'Close', 'Volume'])
+    df['Datetime'] = pd.to_datetime(df['Datetime'], unit='ms')
+    df.set_index('Datetime', inplace=True)
+
+    # 원본 UTC 타임을 KST로 변환
+    df.index = df.index.tz_localize('UTC').tz_convert('Asia/Seoul').tz_localize(None)
+    btc_df = df
 
     btc_df['Prev_Close'] = btc_df['Close'].shift(1)
     tr1 = btc_df['High'] - btc_df['Low']
@@ -102,7 +94,7 @@ def fetch_and_process_data(days_to_show):
 
 def get_live_chart(days_to_show):
     btc_df = fetch_and_process_data(days_to_show)
-    
+
     features = ['Open', 'High', 'Low', 'Close', 'Volume',
                 'SMA_7', 'RSI_14', 'SMA_1H', 'SMA_4H', 'Vol_4H', 'SMA_24H', 'BB_Width']
     X_live = btc_df[features].copy()
@@ -110,7 +102,12 @@ def get_live_chart(days_to_show):
     model_path = './data/model/xgboost_btc_15m_3class_strict.pkl'
     if not os.path.exists(model_path):
         model_path = 'xgboost_btc_15m_3class_strict.pkl'
-    model_xgb = joblib.load(model_path)
+
+    try:
+        model_xgb = joblib.load(model_path)
+    except Exception as e:
+        st.error("AI 모델 파일을 불러오지 못했습니다. github에 pkl 파일이 누락되었을 수 있습니다.")
+        return None, None, btc_df.index[-1], btc_df['Close'].iloc[-1], btc_df['ATR_14'].iloc[-1]
 
     X_live['Pred'] = model_xgb.predict(X_live[features])
 
@@ -120,33 +117,33 @@ def get_live_chart(days_to_show):
     fig = go.Figure(data=[go.Candlestick(x=recent_eval.index,
                     open=recent_eval['Open'], high=recent_eval['High'],
                     low=recent_eval['Low'], close=recent_eval['Close'],
-                    increasing_line_color='#0ECB81', decreasing_line_color='#F6465D',
-                    name='BTC/USD', showlegend=False)])
+                    increasing_line_color='#00E676', decreasing_line_color='#FF3D00',
+                    name='BTC/USDT', showlegend=False)])
 
     pred_up = recent_eval[recent_eval['Pred'] == 2]
     pred_down = recent_eval[recent_eval['Pred'] == 0]
 
     fig.add_trace(go.Scatter(x=pred_up.index, y=pred_up['Low'] * 0.998,
-                             mode='markers', marker=dict(symbol='triangle-up', size=16, color='#0ECB81', line=dict(width=1.5, color='white')),
-                             name='🟢 Pred Up'))
+                             mode='markers', marker=dict(symbol='triangle-up', size=18, color='#00E676', line=dict(width=2, color='white')),
+                             name='🟢 Long Target'))
     fig.add_trace(go.Scatter(x=pred_down.index, y=pred_down['High'] * 1.002,
-                             mode='markers', marker=dict(symbol='triangle-down', size=16, color='#F6465D', line=dict(width=1.5, color='white')),
-                             name='🔴 Pred Down'))
+                             mode='markers', marker=dict(symbol='triangle-down', size=18, color='#FF3D00', line=dict(width=2, color='white')),
+                             name='🔴 Short Target'))
 
-    time_str = recent_eval.index[-1].strftime("%Y-%m-%d %H:%M")
+    time_str = recent_eval.index[-1].strftime("%Y-%m-%d %H:%M:%S")
     fig.update_layout(
-        title=dict(text=f'<b>TH Chart Live Tracking</b><br><span style="font-size:12px;color:gray;">Updated: {time_str}</span>', font=dict(size=16, color='#EAECEF')),
-        yaxis_title='BTC Price (USD)',
+        title=dict(text=f'<b>Live Tracker</b> (Last Kraken Candle: {time_str})', font=dict(size=18, color='#EAECEF')),
+        yaxis_title='USDT',
         xaxis_title='',
         template='plotly_dark',
         xaxis_rangeslider_visible=False,
-        height=450,
-        margin=dict(l=10, r=10, t=55, b=45),
+        height=500,
+        margin=dict(l=10, r=10, t=50, b=10),
         paper_bgcolor='rgba(0,0,0,0)',
         plot_bgcolor='rgba(0,0,0,0)',
         uirevision='live_chart',
         dragmode='pan',
-        legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5)
+        legend=dict(orientation="h", yanchor="bottom", y=-0.15, xanchor="center", x=0.5)
     )
 
     latest_preds = X_live['Pred'].iloc[-5:].values
@@ -157,41 +154,25 @@ def get_live_chart(days_to_show):
 try:
     fig, latest_preds, last_time, last_close, latest_atr = get_live_chart(chart_days)
 
-    st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': False})
+    if fig is not None:
+        st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': False})
 
-    st.markdown("### 📊 실시간 AI 브리핑 패널")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric(label="🔄 마지막 캔들 시간", value=str(last_time))
-    with col2:
-        pred_text = "상승 돌파 📈" if latest_preds[-1] == 2 else ("하락 이탈 📉" if latest_preds[-1] == 0 else "횡보 관망 ⏳")
-        st.metric(label="🎯 현재 캔들 예측", value=pred_text)
-    with col3:
-        st.metric(label="💲 현재가 (Close)", value=f"${last_close:,.2f}")
+        st.markdown("### 🤖 AI Core Analysis")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric(label="⏳ 최신 캔들 타임스탬프 (KST)", value=str(last_time))
+        with col2:
+            pred_text = "상승 돌파 📈" if latest_preds[-1] == 2 else ("하락 이탈 📉" if latest_preds[-1] == 0 else "방향성 모호 ⏳")
+            st.metric(label="🎯 AI 최종 예측", value=pred_text)
+        with col3:
+            st.metric(label="💵 현재 가격", value=f"${last_close:,.2f}")
 
-    if latest_preds[-1] == 2:
-        sl_price = last_close - (1.5 * latest_atr)
-        tp_price = last_close + (3.0 * latest_atr)
-        st.success(f"🟢 **[Long 포지션 진입 시그널]** 익절가(TP): **${tp_price:,.2f}** 🎯 | 손절가(SL): **${sl_price:,.2f}** 🛡️ (1:2 ATR 전략)")
-    elif latest_preds[-1] == 0:
-        sl_price = last_close + (1.5 * latest_atr)
-        tp_price = last_close - (3.0 * latest_atr)
-        st.error(f"🔴 **[Short 포지션 진입 시그널]** 익절가(TP): **${tp_price:,.2f}** 🎯 | 손절가(SL): **${sl_price:,.2f}** 🛡️ (1:2 ATR 전략)")
-    else:
-        st.info("⏳ **[관망 시그널]** 현재는 시장의 방향성이 불명확하여 포지션 진입을 권장하지 않습니다.")
-
-    st.markdown("---")
-    col_log1, col_log2 = st.columns([4, 1])
-    with col_log1:
-        st.markdown("### 📝 AI 예측 자동 기록부 (최근 15개)")
-    with col_log2:
-        if os.path.exists(LOG_FILE):
-            full_df = pd.read_csv(LOG_FILE)
-            csv_data = full_df.to_csv(index=False).encode('utf-8-sig')
-            st.download_button(label="📥 다운로드", data=csv_data, file_name="TH_Chart_History.csv", mime="text/csv")
-
-    history_df = update_prediction_log(last_time, last_close, latest_preds[-1])
-    st.dataframe(history_df.iloc[::-1], use_container_width=True, hide_index=True)
+        if latest_preds[-1] == 2:
+            st.success(f"🟢 **[LONG 시그널]** 추천 익절가: **${last_close + (3.0 * latest_atr):,.2f}** | 추천 손절가: **${last_close - (1.5 * latest_atr):,.2f}**")
+        elif latest_preds[-1] == 0:
+            st.error(f"🔴 **[SHORT 시그널]** 추천 익절가: **${last_close - (3.0 * latest_atr):,.2f}** | 추천 손절가: **${last_close + (1.5 * latest_atr):,.2f}**")
+        else:
+            st.info("⏳ **[WAIT]** 현재는 시장의 변동성이 부족하거나 방향이 불명확합니다.")
 
 except Exception as e:
-    st.error(f"오류 발생: {e}")
+    st.error(f"🚨 시스템 오류 발생 (자동으로 재시도합니다): {e}")
